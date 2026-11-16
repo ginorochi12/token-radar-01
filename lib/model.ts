@@ -231,6 +231,29 @@ export function impliedValue(
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
+/** Categories the watchlist rule treats as wrapped, staked or bridged products of a token that trades. */
+const WRAPPED_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
+
+/** Exchanges whose name at the start of a protocol's name marks it as their product, not its own. */
+const EXCHANGES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
+
+/** A whole word wrapped, staked or staking anywhere in a name, in any case. */
+const WRAPPED_WORD = /\b(wrapped|staked|staking)\b/i;
+
+/**
+ * Whether a protocol is a wrapped, staked or bridged product of a token that already trades: the
+ * watchlist rule's own exclusions, applied to the early rows. WBTC, Binance staked ETH and USDT0 are
+ * the examples the rules name — they record no token in DefiLlama, but each wraps a token that trades,
+ * so ranking them as pre-token launches would be wrong. The watchlist rows are never filtered: the
+ * house's rule already kept them, and the board's coverage is the gate's row.
+ */
+export function isWrappedProduct(p: SnapshotProtocol): boolean {
+  if (p.category !== null && WRAPPED_CATEGORIES.has(p.category)) return true;
+  if (VERSIONED.test(p.name)) return true;
+  if (WRAPPED_WORD.test(p.name)) return true;
+  return EXCHANGES.some((e) => p.name.startsWith(e));
+}
+
 /** Whether a protocol records no token at all. */
 export function isPreToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd === null && p.gecko_id === null && p.symbol === null;
@@ -266,10 +289,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // The early radar: every rankable pre-token protocol the snapshot carries, watchlist or not. The
-  // radar exists to find the early ones, so the board ranks all of them, not a capped sample.
+  // The early radar: every rankable pre-token protocol the snapshot carries, watchlist or not, minus
+  // the wrapped, staked and bridged products of tokens that already trade. The radar exists to find
+  // the early ones, so the board ranks all of them, not a capped sample.
   for (const p of snapshot.protocols) {
-    if (!chosen.has(p.slug) && isRankable(p)) chosen.set(p.slug, p);
+    if (!chosen.has(p.slug) && isRankable(p) && !isWrappedProduct(p)) chosen.set(p.slug, p);
   }
 
   const totals = categoryTotals([...chosen.values()]);
@@ -458,7 +482,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
   const board = buildBoard(snapshot, model);
   const live = liveRows(snapshot);
   const early = board.filter((r) => !snapshot.watchlist.includes(r.slug)).length;
-  const totals = categoryTotals(snapshot.protocols.filter(isRankable));
+  const totals = categoryTotals(board.map((r) => snapshot.protocols.find((p) => p.slug === r.slug)!).filter(Boolean));
   const categoryTotalsObj: Record<string, number> = {};
   for (const [k, v] of totals) categoryTotalsObj[k] = v;
   const radar: RadarData = {
